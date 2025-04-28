@@ -51,7 +51,23 @@ const isAuthenticated = async (req, res, next) => {
 const { testConnection, initializeDatabase } = require('./config/db')
 const dbStorage = require('./models/db-storage')
 
+// Middleware
+const corsOptions = {
+  origin: 'http://localhost:8080',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'Cache-Control',
+    'Pragma',
+    'Expires',
+    'Accept',
+  ],
+  credentials: true,
+}
+
 // Body Parser Middleware
+app.use(cors(corsOptions))
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
 
