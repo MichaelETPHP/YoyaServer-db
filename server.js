@@ -8,52 +8,24 @@ const cors = require('cors')
 const app = express()
 const PORT = 3000
 
-// Authentication middleware
-const isAuthenticated = async (req, res, next) => {
-  const authHeader = req.headers.authorization
-  if (!authHeader) {
-    return res
-      .status(401)
-      .json({ message: 'Unauthorized - No authorization header' })
-  }
-
-  const [type, token] = authHeader.split(' ')
-  if (type !== 'Bearer' || !token) {
-    return res
-      .status(401)
-      .json({ message: 'Unauthorized - Invalid authorization format' })
-  }
-
-  try {
-    const session = await dbStorage.getSession(token)
-    if (!session || Date.now() > session.expires) {
-      if (session) {
-        await dbStorage.deleteSession(token)
-      }
-      return res.status(401).json({ message: 'Session expired' })
-    }
-
-    req.user =
-      typeof session.userData === 'string'
-        ? JSON.parse(session.userData)
-        : session.userData
-
-    next()
-  } catch (error) {
-    console.error('Authentication error:', error)
-    res
-      .status(500)
-      .json({ message: 'Internal server error during authentication' })
-  }
-}
-
-// Database setup (assuming you have a db.js file to handle database connections)
+// Database setup
 const { testConnection, initializeDatabase } = require('./config/db')
 const dbStorage = require('./models/db-storage')
 
-// Middleware
+// ✅ CORS Setup: Allow multiple frontend origins
+const allowedOrigins = [
+  'http://localhost:8080', // Local development
+  'https://yo1-ivory.vercel.app', // Production frontend
+]
+
 const corsOptions = {
-  origin: 'http://localhost:8080',
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('Not allowed by CORS'))
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: [
     'Content-Type',
@@ -66,21 +38,60 @@ const corsOptions = {
   credentials: true,
 }
 
-// Body Parser Middleware
 app.use(cors(corsOptions))
+
+// Body Parser Middleware
 app.use(bodyParser.json())
 app.use(bodyParser.urlencoded({ extended: true }))
 
-// API Routes
+// Authentication Middleware
+const isAuthenticated = async (req, res, next) => {
+  const authHeader = req.headers.authorization
+  if (!authHeader) {
+    return res.status(401).json({ message: 'Unauthorized - No token provided' })
+  }
+
+  const [type, token] = authHeader.split(' ')
+  if (type !== 'Bearer' || !token) {
+    return res
+      .status(401)
+      .json({ message: 'Unauthorized - Invalid token format' })
+  }
+
+  try {
+    const session = await dbStorage.getSession(token)
+    if (!session || Date.now() > session.expires) {
+      if (session) await dbStorage.deleteSession(token)
+      return res.status(401).json({ message: 'Session expired' })
+    }
+
+    req.user =
+      typeof session.userData === 'string'
+        ? JSON.parse(session.userData)
+        : session.userData
+    next()
+  } catch (error) {
+    console.error('Authentication error:', error)
+    res
+      .status(500)
+      .json({ message: 'Internal server error during authentication' })
+  }
+}
+
+// --- ROUTES ---
+
+// CORS test route
 app.get('/api/cors-test', (req, res) => {
   res.json({ message: 'CORS is working!' })
 })
 
+// Login route
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body
   try {
     let user = await dbStorage.getUserByUsername(username)
 
+    // Create default admin user if not found
     if (!user && username === 'admin' && password === 'admin123') {
       await dbStorage.createDefaultAdminUser()
       user = await dbStorage.getUserByUsername('admin')
@@ -100,6 +111,7 @@ app.post('/api/login', async (req, res) => {
     const expiresTimestamp = Date.now() + 24 * 60 * 60 * 1000 // 24 hours
 
     await dbStorage.createSession(token, user.id, userData, expiresTimestamp)
+
     res.json({ token, user: userData })
   } catch (error) {
     console.error('Login error:', error)
@@ -107,20 +119,17 @@ app.post('/api/login', async (req, res) => {
   }
 })
 
+// Get user from session
 app.get('/api/user', async (req, res) => {
   const authHeader = req.headers.authorization
-  if (!authHeader) {
-    return res.status(401).json({ message: 'Unauthorized' })
-  }
+  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' })
 
   try {
     const token = authHeader.split(' ')[1]
     const session = await dbStorage.getSession(token)
 
     if (!session || Date.now() > session.expires) {
-      if (session) {
-        await dbStorage.deleteSession(token)
-      }
+      if (session) await dbStorage.deleteSession(token)
       return res.status(401).json({ message: 'Session expired' })
     }
 
@@ -131,6 +140,7 @@ app.get('/api/user', async (req, res) => {
   }
 })
 
+// Logout
 app.post('/api/logout', async (req, res) => {
   const authHeader = req.headers.authorization
   if (authHeader) {
@@ -144,6 +154,7 @@ app.post('/api/logout', async (req, res) => {
   res.json({ message: 'Logged out successfully' })
 })
 
+// Menu routes
 app.get('/api/menu', async (req, res) => {
   try {
     const menuItems = await dbStorage.getMenuItems()
@@ -157,9 +168,8 @@ app.get('/api/menu', async (req, res) => {
 app.get('/api/menu/:id', async (req, res) => {
   try {
     const menuItem = await dbStorage.getMenuItemById(req.params.id)
-    if (!menuItem) {
+    if (!menuItem)
       return res.status(404).json({ message: 'Menu item not found' })
-    }
     res.json(menuItem)
   } catch (error) {
     console.error('Get menu item error:', error)
@@ -195,9 +205,8 @@ app.post('/api/menu', isAuthenticated, async (req, res) => {
 app.put('/api/menu/:id', isAuthenticated, async (req, res) => {
   try {
     const updatedItem = await dbStorage.updateMenuItem(req.params.id, req.body)
-    if (!updatedItem) {
+    if (!updatedItem)
       return res.status(404).json({ message: 'Menu item not found' })
-    }
     res.json(updatedItem)
   } catch (error) {
     console.error('Update menu item error:', error)
@@ -208,9 +217,9 @@ app.put('/api/menu/:id', isAuthenticated, async (req, res) => {
 app.delete('/api/menu/:id', isAuthenticated, async (req, res) => {
   try {
     const menuItem = await dbStorage.getMenuItemById(req.params.id)
-    if (!menuItem) {
+    if (!menuItem)
       return res.status(404).json({ message: 'Menu item not found' })
-    }
+
     await dbStorage.deleteMenuItem(req.params.id)
     res.json({ message: 'Menu item deleted successfully' })
   } catch (error) {
@@ -219,6 +228,7 @@ app.delete('/api/menu/:id', isAuthenticated, async (req, res) => {
   }
 })
 
+// Categories routes
 app.get('/api/categories', async (req, res) => {
   try {
     const categories = await dbStorage.getCategories()
@@ -245,9 +255,8 @@ app.put('/api/categories/:id', isAuthenticated, async (req, res) => {
       req.params.id,
       req.body.name
     )
-    if (!updatedCategory) {
+    if (!updatedCategory)
       return res.status(404).json({ message: 'Category not found' })
-    }
     res.json(updatedCategory)
   } catch (error) {
     console.error('Update category error:', error)
@@ -270,21 +279,22 @@ app.delete('/api/categories/:id', isAuthenticated, async (req, res) => {
   }
 })
 
+// Admin Panel Page
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/admin/index.html'))
 })
 
-// Example: Route to test Database connection
+// Test DB connection
 app.get('/test-db', async (req, res) => {
   try {
-    const connectionStatus = await testConnection() // testConnection should return a status or error
+    const connectionStatus = await testConnection()
     res.status(200).send(connectionStatus)
   } catch (error) {
     res.status(500).send({ message: 'Database connection failed', error })
   }
 })
 
-// Listen to requests on the specified port
+// Server Listener
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Yoya Coffee MySQL server running at http://0.0.0.0:${PORT}/`)
 })
